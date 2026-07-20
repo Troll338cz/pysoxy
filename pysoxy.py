@@ -188,6 +188,7 @@ def request(wrapper):
     rep = b'\x07'
     bnd = b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00'
     socket_dst = 0
+    reply = b'\x01\x03'
     if dst:
         socket_dst = connect_to_dst(dst[0], dst[1], dst[2])
     if not dst or socket_dst == 0:
