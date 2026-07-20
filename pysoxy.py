@@ -54,7 +54,7 @@ CMD_CONNECT = b'\x01'
 ATYP_IPV4 = b'\x01'
 # DOMAINNAME '03'
 ATYP_DOMAINNAME = b'\x03'
-# DOMAINNAME '03'
+# IP V6 address '04'
 ATYP_IPV6 = b'\x04'
 
 
