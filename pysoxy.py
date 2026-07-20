@@ -157,7 +157,7 @@ def request_client(wrapper):
         dst_port = unpack('>H', s5_request[8:len(s5_request)])[0]
     # DOMAIN NAME
     elif s5_request[3:4] == ATYP_DOMAINNAME:
-        dst_family = ATYP_IPV4 # TODO
+        dst_family = ATYP_IPV4 # TODO: Fix IPv6 for socks5h
         sz_domain_name = s5_request[4]
         dst_addr = s5_request[5: 5 + sz_domain_name - len(s5_request)]
         port_to_unpack = s5_request[5 + sz_domain_name:len(s5_request)]
