@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
  Small Socks5 Proxy Server in Python
@@ -29,7 +30,7 @@ LOCAL_PORT = 9050
 # a routing decision is made
 # OUTGOING_INTERFACE = "eth0"
 OUTGOING_INTERFACE = ""
-AUTH_ENABLE = False
+AUTH_ENABLE = True
 AUTH_USER = "username"
 AUTH_PASS = "password"
 
@@ -56,6 +57,9 @@ ATYP_IPV4 = b'\x01'
 ATYP_DOMAINNAME = b'\x03'
 # IP V6 address '04'
 ATYP_IPV6 = b'\x04'
+# AUTH status codes
+AUTH_STATUS_OK = b'\x01\x00'
+AUTH_STATUS_FAILURE = b'\x01\xff'
 
 
 class ExitStatus:
@@ -253,29 +257,27 @@ def subnegotiation_auth(wrapper):
     # +-----+----------+------+----------+------+
     # | VER | User LEN | User | Pass LEN | Pass |
     # +-----+----------+------+----------+------+
-    auth_reply_success = b'\x01\x00'
-    auth_reply_failure = b'\x01\xff'
 
     try:
         auth_packet = wrapper.recv(BUFSIZE)
     except socket.error:
         error()
-        return auth_reply_failure
+        return AUTH_STATUS_FAILURE
 
     # Too short
     if len(auth_packet) < 2:
-        return auth_reply_failure
+        return AUTH_STATUS_FAILURE
 
     # Wrong version
     if auth_packet[0] != 1:
-        return auth_reply_failure
+        return AUTH_STATUS_FAILURE
 
     ulen = auth_packet[1]
     offset = 2
 
     # Len check #1
     if len(auth_packet) < offset + ulen + 1:
-        return auth_reply_failure
+        return AUTH_STATUS_FAILURE
 
     username = auth_packet[offset:offset + ulen]
     offset += ulen
@@ -285,14 +287,14 @@ def subnegotiation_auth(wrapper):
 
     # Len check #2
     if len(auth_packet) < offset + plen:
-        return auth_reply_failure
+        return AUTH_STATUS_FAILURE
 
     password = auth_packet[offset:offset + plen]
 
     if username.decode('utf-8', errors="replace") == AUTH_USER and password.decode('utf-8', errors="replace") == AUTH_PASS:
-           return auth_reply_success
+           return AUTH_STATUS_OK
 
-    return auth_reply_failure
+    return AUTH_STATUS_FAILURE
 
 def subnegotiation(wrapper):
     """
@@ -325,6 +327,9 @@ def subnegotiation(wrapper):
         except socket.error:
             error()
             return False
+
+    if method == M_NOTAVAILABLE or reply == AUTH_STATUS_FAILURE:
+        return False
 
     return True
 
