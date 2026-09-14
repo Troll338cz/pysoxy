@@ -135,6 +135,17 @@ def connect_to_dst(dst_addr, dst_port, socket_family):
         error("Failed to connect to DST", err)
         return 0
 
+def socks_get_ip_type(dst_addr, dst_port):
+    """ Try connecting using an IPv6 socket. If the DNS name returns only an IPv4 address, the connection will fail.
+        If you do not want to open a dummy connection or have IPv6 as default, disable socks5h or edit this function to use DNS detection. """
+    try:
+        test_sock = connect_to_dst( dst_addr, dst_port, ATYP_IPV6 )
+        test_sock.close()
+        return ATYP_IPV6
+    except socket.error as err:
+        pass
+    return ATYP_IPV4
+
 def request_client(wrapper):
     """ Client request details """
     # +-----+-----+-------+------+----------+----------+
@@ -156,21 +167,21 @@ def request_client(wrapper):
         return False
     # IPV4
     if s5_request[3:4] == ATYP_IPV4:
-        dst_family = ATYP_IPV4
         dst_addr = socket.inet_ntoa(s5_request[4:-2])
         dst_port = unpack('>H', s5_request[8:len(s5_request)])[0]
+        dst_family = ATYP_IPV4
     # DOMAIN NAME
     elif s5_request[3:4] == ATYP_DOMAINNAME:
-        dst_family = ATYP_IPV4 # TODO: Fix IPv6 for socks5h
         sz_domain_name = s5_request[4]
         dst_addr = s5_request[5: 5 + sz_domain_name - len(s5_request)]
         port_to_unpack = s5_request[5 + sz_domain_name:len(s5_request)]
         dst_port = unpack('>H', port_to_unpack)[0]
+        dst_family = socks_get_ip_type(dst_addr, dst_port)
     # IPv6
     elif s5_request[3:4] == ATYP_IPV6:
-        dst_family = ATYP_IPV6
         dst_addr = socket.inet_ntop(socket.AF_INET6, s5_request[4:-2])
         dst_port = unpack('>H', s5_request[20:len(s5_request)])[0]
+        dst_family = ATYP_IPV6
     else:
         return False
 
@@ -192,7 +203,7 @@ def request(wrapper):
     rep = b'\x07'
     bnd = b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00'
     socket_dst = 0
-    reply = b'\x01\x03'
+    reply = b'\x01\x03' # Fixes "UnboundLocalError", tried to make it return a valid SOCKS error code but that didn't work, connection will close with generic error.
     if dst:
         socket_dst = connect_to_dst(dst[0], dst[1], dst[2])
     if not dst or socket_dst == 0:
