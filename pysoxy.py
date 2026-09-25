@@ -30,6 +30,7 @@ LOCAL_PORT = 9050
 # a routing decision is made
 # OUTGOING_INTERFACE = "eth0"
 OUTGOING_INTERFACE = ""
+# SOCKS5 Basic Authentication (type 0x02)
 AUTH_ENABLE = True
 AUTH_USER = "username"
 AUTH_PASS = "password"
@@ -57,7 +58,7 @@ ATYP_IPV4 = b'\x01'
 ATYP_DOMAINNAME = b'\x03'
 # IP V6 address '04'
 ATYP_IPV6 = b'\x04'
-# AUTH status codes
+'''Authentication status codes'''
 AUTH_STATUS_OK = b'\x01\x00'
 AUTH_STATUS_FAILURE = b'\x01\xff'
 
@@ -203,11 +204,11 @@ def request(wrapper):
     rep = b'\x07'
     bnd = b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00'
     socket_dst = 0
-    reply = b'\x01\x03' # Fixes "UnboundLocalError", tried to make it return a valid SOCKS error code but that didn't work, connection will close with generic error.
+    reply = b''
     if dst:
         socket_dst = connect_to_dst(dst[0], dst[1], dst[2])
     if not dst or socket_dst == 0:
-        rep = b'\x01'
+        reply = VER + b'\x05\x00\x01\x00\x00\x00\x00\x00\x00'
     else:
         rep = b'\x00'
         if dst[2] == ATYP_IPV6:
@@ -254,6 +255,7 @@ def subnegotiation_client(wrapper):
     methods = identification_packet[2:]
     if len(methods) != nmethods:
         return M_NOTAVAILABLE
+    # Enforce only one supported method
     for method in methods:
         if method == ord(M_NOAUTH) and not AUTH_ENABLE:
             return M_NOAUTH
@@ -319,7 +321,7 @@ def subnegotiation(wrapper):
     # +-----+--------+
     # | VER | METHOD |
     # +-----+--------+
-    reply = b""
+    reply = b''
     if method == M_NOAUTH or method == M_AUTHBASIC or method == M_NOTAVAILABLE:
         reply = VER + method
     else:
