@@ -62,6 +62,25 @@ ATYP_IPV6 = b'\x04'
 '''Authentication status codes'''
 AUTH_STATUS_OK = b'\x01\x00'
 AUTH_STATUS_FAILURE = b'\x01\xff'
+'''SOCKS Reply status codes'''
+# Connection succeeded
+RS_SUCESS = b'\x00'
+# General SOCKS server failure
+RS_FAILURE = b'\x01'
+# Connection not allowed by ruleset (unimplemented)
+RS_NOTALLOWED = b'\x02'
+# Network unreachable (unimplemented)
+RS_NETUNREACH = b'\x03'
+# Host unreachable
+RS_HOSTUNREACH = b'\x04'
+# Connection refused
+RS_REFUSED = b'\x05'
+# TTL expired (unimplemented)
+RS_TTLEXP = b'\x06'
+# Command not supported
+RS_CMDNOTSUPP = b'\x07'
+# Address type not supported
+RS_NETNOTSUPP = b'\x08'
 
 
 class ExitStatus:
@@ -134,7 +153,7 @@ def connect_to_dst(dst_addr, dst_port, socket_family):
         return 0
 
 def socks_get_ip_type(dst_addr, dst_port):
-    """ Determine socket family to connect with. """
+    """ Determine IP and socket family to connect with, pick first A/AAAA responce from DNS. """
     family, _, _, _, sockaddr = socket.getaddrinfo(dst_addr, dst_port, type=socket.SOCK_STREAM)[0]
     return (ATYP_IPV6 if family == socket.AF_INET6 else ATYP_IPV4), sockaddr[0], sockaddr[1]
 
@@ -150,15 +169,8 @@ def request_client(wrapper):
     if s5_request[0:1] != VER or s5_request[2:3] != b'\x00':
         return None, None
     if s5_request[1:2] != CMD_CONNECT:
-        return None, b'\x07'
+        return None, RS_CMDNOTSUPP
     try:
-        # Check VER, CMD and RSV
-        if (
-                s5_request[0:1] != VER or
-                s5_request[1:2] != CMD_CONNECT or
-                s5_request[2:3] != b'\x00'
-        ):
-            return False
         # IPV4
         if s5_request[3:4] == ATYP_IPV4:
             dst_addr = socket.inet_ntoa(s5_request[4:8])
@@ -175,12 +187,12 @@ def request_client(wrapper):
             dst_port = unpack('>H', s5_request[20:22])[0]
             dst_family = ATYP_IPV6
         else:
-            return None, b'\x08'
-        return (dst_addr, dst_port, dst_family), b'\x00'
+            return None, RS_NETNOTSUPP
+        return (dst_addr, dst_port, dst_family), RS_SUCESS
     except socket.gaierror:
-        return None, b'\x04'
+        return None, RS_HOSTUNREACH
     except (IndexError, struct_error):
-        return None, b'\x01'
+        return None, RS_FAILURE
 
 
 def request(wrapper):
@@ -199,7 +211,7 @@ def request(wrapper):
         if target:
             socket_dst = connect_to_dst(*target)
             if socket_dst != 0:
-                rep = b'\x00'
+                rep = RS_SUCESS
                 host, port = socket_dst.getsockname()[:2]
                 if target[2] == ATYP_IPV6:
                     bnd = socket.inet_pton(socket.AF_INET6, host.split('%')[0])
@@ -207,10 +219,10 @@ def request(wrapper):
                 else:
                     reply = VER + rep + b'\x00' + ATYP_IPV4 + socket.inet_aton(host) + pack('>H', port)
             else:
-                rep = b'\x05'
+                rep = RS_REFUSED
                 reply = VER + rep + b'\x00\x01' + b'\x00' * 6
         wrapper.sendall(reply)
-        if rep == b'\x00':
+        if rep == RS_SUCESS:
             proxy_loop(wrapper, socket_dst)
     finally:
         if socket_dst != 0:
