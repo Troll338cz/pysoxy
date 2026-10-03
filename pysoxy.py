@@ -8,13 +8,14 @@
 # Network
 import socket
 import select
-from struct import pack, unpack
+from struct import pack, unpack, error as struct_error
 # System
 import traceback
 from threading import Thread, active_count
 from signal import signal, SIGINT, SIGTERM
 from time import sleep
 import sys
+import os
 
 #
 # Configuration
@@ -22,7 +23,7 @@ import sys
 MAX_THREADS = 200
 BUFSIZE = 2048
 TIMEOUT_SOCKET = 5
-LOCAL_ADDR = '0.0.0.0'
+LOCAL_ADDR = '127.0.0.1'
 LOCAL_PORT = 9050
 # Parameter to bind a socket to a device, using SO_BINDTODEVICE
 # Only root can set this option
@@ -32,8 +33,8 @@ LOCAL_PORT = 9050
 OUTGOING_INTERFACE = ""
 # SOCKS5 Basic Authentication (type 0x02)
 AUTH_ENABLE = True
-AUTH_USER = "username"
-AUTH_PASS = "password"
+AUTH_USER = ""
+AUTH_PASS = ""
 
 #
 # Constants
@@ -108,9 +109,9 @@ def proxy_loop(socket_src, socket_dst):
                 if not data:
                     return
                 if sock is socket_dst:
-                    socket_src.send(data)
+                    socket_src.sendall(data)
                 else:
-                    socket_dst.send(data)
+                    socket_dst.sendall(data)
         except socket.error as err:
             error("Loop failed", err)
             return
@@ -120,15 +121,11 @@ def connect_to_dst(dst_addr, dst_port, socket_family):
     """ Connect to desired destination """
     sock = create_socket(socket_family)
     if OUTGOING_INTERFACE:
-        try:
-            sock.setsockopt(
-                socket.SOL_SOCKET,
-                socket.SO_BINDTODEVICE,
-                OUTGOING_INTERFACE.encode(),
-            )
-        except PermissionError as err:
-            print("Only root can set OUTGOING_INTERFACE parameter")
-            EXIT.set_status(True)
+        sock.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_BINDTODEVICE,
+            OUTGOING_INTERFACE.encode(),
+        )
     try:
         sock.connect((dst_addr, dst_port))
         return sock
@@ -137,15 +134,9 @@ def connect_to_dst(dst_addr, dst_port, socket_family):
         return 0
 
 def socks_get_ip_type(dst_addr, dst_port):
-    """ Try connecting using an IPv6 socket. If the DNS name returns only an IPv4 address, the connection will fail.
-        If you do not want to open a dummy connection or have IPv6 as default, disable socks5h or edit this function to use DNS detection. """
-    try:
-        test_sock = connect_to_dst( dst_addr, dst_port, ATYP_IPV6 )
-        test_sock.close()
-        return ATYP_IPV6
-    except socket.error as err:
-        pass
-    return ATYP_IPV4
+    """ Determine socket family to connect with. """
+    family, _, _, _, sockaddr = socket.getaddrinfo(dst_addr, dst_port, type=socket.SOCK_STREAM)[0]
+    return (ATYP_IPV6 if family == socket.AF_INET6 else ATYP_IPV4), sockaddr[0], sockaddr[1]
 
 def request_client(wrapper):
     """ Client request details """
@@ -155,38 +146,41 @@ def request_client(wrapper):
     try:
         s5_request = wrapper.recv(BUFSIZE)
     except ConnectionResetError:
-        if wrapper != 0:
-            wrapper.close()
-        error()
-        return False
-    # Check VER, CMD and RSV
-    if (
-            s5_request[0:1] != VER or
-            s5_request[1:2] != CMD_CONNECT or
-            s5_request[2:3] != b'\x00'
-    ):
-        return False
-    # IPV4
-    if s5_request[3:4] == ATYP_IPV4:
-        dst_addr = socket.inet_ntoa(s5_request[4:-2])
-        dst_port = unpack('>H', s5_request[8:len(s5_request)])[0]
-        dst_family = ATYP_IPV4
-    # DOMAIN NAME
-    elif s5_request[3:4] == ATYP_DOMAINNAME:
-        sz_domain_name = s5_request[4]
-        dst_addr = s5_request[5: 5 + sz_domain_name - len(s5_request)]
-        port_to_unpack = s5_request[5 + sz_domain_name:len(s5_request)]
-        dst_port = unpack('>H', port_to_unpack)[0]
-        dst_family = socks_get_ip_type(dst_addr, dst_port)
-    # IPv6
-    elif s5_request[3:4] == ATYP_IPV6:
-        dst_addr = socket.inet_ntop(socket.AF_INET6, s5_request[4:-2])
-        dst_port = unpack('>H', s5_request[20:len(s5_request)])[0]
-        dst_family = ATYP_IPV6
-    else:
-        return False
-
-    return (dst_addr, dst_port, dst_family)
+        return None, None
+    if s5_request[0:1] != VER or s5_request[2:3] != b'\x00':
+        return None, None
+    if s5_request[1:2] != CMD_CONNECT:
+        return None, b'\x07'
+    try:
+        # Check VER, CMD and RSV
+        if (
+                s5_request[0:1] != VER or
+                s5_request[1:2] != CMD_CONNECT or
+                s5_request[2:3] != b'\x00'
+        ):
+            return False
+        # IPV4
+        if s5_request[3:4] == ATYP_IPV4:
+            dst_addr = socket.inet_ntoa(s5_request[4:8])
+            dst_port = unpack('>H', s5_request[8:10])[0]
+            dst_family = ATYP_IPV4
+        # DOMAIN NAME
+        elif s5_request[3:4] == ATYP_DOMAINNAME:
+            sz = s5_request[4]
+            port_to_unpack = s5_request[5 + sz : 7 + sz]
+            dst_family, dst_addr, dst_port  = socks_get_ip_type(s5_request[5 : 5 + sz], unpack('>H', port_to_unpack)[0])
+        # IPv6
+        elif s5_request[3:4] == ATYP_IPV6:
+            dst_addr = socket.inet_ntop(socket.AF_INET6, s5_request[4:20])
+            dst_port = unpack('>H', s5_request[20:22])[0]
+            dst_family = ATYP_IPV6
+        else:
+            return None, b'\x08'
+        return (dst_addr, dst_port, dst_family), b'\x00'
+    except socket.gaierror:
+        return None, b'\x04'
+    except (IndexError, struct_error):
+        return None, b'\x01'
 
 
 def request(wrapper):
@@ -196,42 +190,31 @@ def request(wrapper):
         authentication negotiations.  The server evaluates the request, and
         returns a reply
     """
-    dst = request_client(wrapper)
-    # Server Reply
-    # +-----+-----+-------+------+----------+----------+
-    # | VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-    # +-----+-----+-------+------+----------+----------+
-    rep = b'\x07'
-    bnd = b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00' + b'\x00'
-    socket_dst = 0
-    reply = b''
-    if dst:
-        socket_dst = connect_to_dst(dst[0], dst[1], dst[2])
-    if not dst or socket_dst == 0:
-        reply = VER + b'\x05\x00\x01\x00\x00\x00\x00\x00\x00'
-    else:
-        rep = b'\x00'
-        if dst[2] == ATYP_IPV6:
-            bnd = socket.inet_pton(socket.AF_INET6, socket_dst.getsockname()[0])
-            bnd += pack(">H", socket_dst.getsockname()[1])
-            reply = VER + rep + b'\x00' + ATYP_IPV6 + bnd
-        else:
-            bnd = socket.inet_aton(socket_dst.getsockname()[0])
-            bnd += pack(">H", socket_dst.getsockname()[1])
-            reply = VER + rep + b'\x00' + ATYP_IPV4 + bnd
-    try:
-        wrapper.sendall(reply)
-    except socket.error:
-        if wrapper != 0:
-            wrapper.close()
+    target, rep = request_client(wrapper)
+    if rep is None:
         return
-    # start proxy
-    if rep == b'\x00':
-        proxy_loop(wrapper, socket_dst)
-    if wrapper != 0:
-        wrapper.close()
-    if socket_dst != 0:
-        socket_dst.close()
+    socket_dst = 0
+    reply = VER + rep + b'\x00\x01' + b'\x00' * 6
+    try:
+        if target:
+            socket_dst = connect_to_dst(*target)
+            if socket_dst != 0:
+                rep = b'\x00'
+                host, port = socket_dst.getsockname()[:2]
+                if target[2] == ATYP_IPV6:
+                    bnd = socket.inet_pton(socket.AF_INET6, host.split('%')[0])
+                    reply = VER + rep + b'\x00' + ATYP_IPV6 + bnd + pack('>H', port)
+                else:
+                    reply = VER + rep + b'\x00' + ATYP_IPV4 + socket.inet_aton(host) + pack('>H', port)
+            else:
+                rep = b'\x05'
+                reply = VER + rep + b'\x00\x01' + b'\x00' * 6
+        wrapper.sendall(reply)
+        if rep == b'\x00':
+            proxy_loop(wrapper, socket_dst)
+    finally:
+        if socket_dst != 0:
+            socket_dst.close()
 
 def subnegotiation_client(wrapper):
     """
@@ -349,9 +332,13 @@ def subnegotiation(wrapper):
 
 def connection(wrapper):
     """ Function run by a thread """
-    if subnegotiation(wrapper):
-        request(wrapper)
-
+    try:
+        if subnegotiation(wrapper):
+            request(wrapper)
+    except Exception:
+        error()
+    finally:
+        wrapper.close()
 
 def create_socket(socket_family):
     """ Create an INET, STREAMing socket """
@@ -363,7 +350,7 @@ def create_socket(socket_family):
         sock.settimeout(TIMEOUT_SOCKET)
     except socket.error as err:
         error("Failed to create socket", err)
-        sys.exit(0)
+        sys.exit(1)
     return sock
 
 
@@ -379,14 +366,14 @@ def bind_port(sock):
     except socket.error as err:
         error("Bind failed", err)
         sock.close()
-        sys.exit(0)
+        sys.exit(1)
     # Listen
     try:
         sock.listen(10)
     except socket.error as err:
         error("Listen failed", err)
         sock.close()
-        sys.exit(0)
+        sys.exit(1)
     return sock
 
 
@@ -398,17 +385,26 @@ def exit_handler(signum, frame):
 
 def main():
     """ Main function """
+    if OUTGOING_INTERFACE and os.getuid() != 0:
+        print("Only root can run with OUTGOING_INTERFACE parameter set.")
+        sys.exit(1)
+
+    if AUTH_ENABLE and not ( len(AUTH_USER) and len(AUTH_PASS) ):
+        print("Authentication enabled but no login set, quitting.")
+        sys.exit(1)
+
     new_socket = create_socket(ATYP_IPV4)
     bind_port(new_socket)
     signal(SIGINT, exit_handler)
     signal(SIGTERM, exit_handler)
+    
     while not EXIT.get_status():
         if active_count() > MAX_THREADS:
             sleep(3)
             continue
         try:
             wrapper, _ = new_socket.accept()
-            wrapper.setblocking(1)
+            wrapper.settimeout(30)
         except socket.timeout:
             continue
         except socket.error:
@@ -416,7 +412,7 @@ def main():
             continue
         except TypeError:
             error()
-            sys.exit(0)
+            sys.exit(1)
         recv_thread = Thread(target=connection, args=(wrapper, ))
         recv_thread.start()
     new_socket.close()
