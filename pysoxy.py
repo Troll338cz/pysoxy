@@ -16,6 +16,7 @@ from signal import signal, SIGINT, SIGTERM
 from time import sleep
 import sys
 import os
+import argparse
 
 #
 # Configuration
@@ -372,7 +373,7 @@ def bind_port(sock):
         listen for connections made to the socket
     """
     try:
-        print('Bind {}'.format(str(LOCAL_PORT)))
+        print('Bind {}:{}'.format(LOCAL_ADDR, str(LOCAL_PORT)))
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((LOCAL_ADDR, LOCAL_PORT))
     except socket.error as err:
@@ -397,6 +398,26 @@ def exit_handler(signum, frame):
 
 def main():
     """ Main function """
+    parser = argparse.ArgumentParser(description='pysoxy - Socks5 Proxy Server')
+    parser.add_argument('--addr', help='Set listen IP')
+    parser.add_argument('--port', help='Set listen port')
+    parser.add_argument('--username', help='Override username')
+    parser.add_argument('--password', help='Override password')
+    args = parser.parse_args()
+
+    if args.addr is not None:
+        global LOCAL_ADDR
+        LOCAL_ADDR = args.addr
+    if args.port is not None:
+        global LOCAL_PORT
+        LOCAL_PORT = int(args.port)
+    if not ( args.username is None and args.password is None ):
+        print('Authentication enabled. Login set to {}/{}'.format(args.username,args.password))
+        global AUTH_ENABLE, AUTH_USER, AUTH_PASS
+        AUTH_ENABLE = True
+        AUTH_USER = args.username
+        AUTH_PASS = args.password
+
     if OUTGOING_INTERFACE and os.getuid() != 0:
         print("Only root can run with OUTGOING_INTERFACE parameter set.")
         sys.exit(1)
@@ -409,7 +430,7 @@ def main():
     bind_port(new_socket)
     signal(SIGINT, exit_handler)
     signal(SIGTERM, exit_handler)
-    
+
     while not EXIT.get_status():
         if active_count() > MAX_THREADS:
             sleep(3)
