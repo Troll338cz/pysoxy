@@ -153,10 +153,12 @@ def connect_to_dst(dst_addr, dst_port, socket_family):
         error("Failed to connect to DST", err)
         return 0
 
+
 def socks_get_ip_type(dst_addr, dst_port):
-    """ Determine IP and socket family to connect with, pick first A/AAAA responce from DNS. """
+    """ Determine IP and socket family to connect with, picking first A/AAAA responce returned from DNS. """
     family, _, _, _, sockaddr = socket.getaddrinfo(dst_addr, dst_port, type=socket.SOCK_STREAM)[0]
     return (ATYP_IPV6 if family == socket.AF_INET6 else ATYP_IPV4), sockaddr[0], sockaddr[1]
+
 
 def request_client(wrapper):
     """ Client request details """
@@ -203,9 +205,14 @@ def request(wrapper):
         authentication negotiations.  The server evaluates the request, and
         returns a reply
     """
+    # Server Reply
+    # +-----+-----+-------+------+----------+----------+
+    # | VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+    # +-----+-----+-------+------+----------+----------+
     target, rep = request_client(wrapper)
     if rep is None:
         return
+
     socket_dst = 0
     reply = VER + rep + b'\x00\x01' + b'\x00' * 6
     try:
@@ -228,6 +235,7 @@ def request(wrapper):
     finally:
         if socket_dst != 0:
             socket_dst.close()
+
 
 def subnegotiation_client(wrapper):
     """
@@ -258,6 +266,7 @@ def subnegotiation_client(wrapper):
         if method == ord(M_AUTHBASIC) and AUTH_ENABLE:
             return M_AUTHBASIC
     return M_NOTAVAILABLE
+
 
 def subnegotiation_auth(wrapper):
     """
@@ -304,6 +313,7 @@ def subnegotiation_auth(wrapper):
            return AUTH_STATUS_OK
 
     return AUTH_STATUS_FAILURE
+
 
 def subnegotiation(wrapper):
     """
@@ -353,6 +363,7 @@ def connection(wrapper):
     finally:
         wrapper.close()
 
+
 def create_socket(socket_family):
     """ Create an INET, STREAMing socket """
     try:
@@ -398,7 +409,7 @@ def exit_handler(signum, frame):
 
 def main():
     """ Main function """
-    parser = argparse.ArgumentParser(description='pysoxy - Socks5 Proxy Server')
+    parser = argparse.ArgumentParser(description='pysoxy - SOCKS5/SOCKS5H Proxy Server')
     parser.add_argument('--addr', help='Set listen IP')
     parser.add_argument('--port', help='Set listen port')
     parser.add_argument('--username', help='Override username')
@@ -412,7 +423,7 @@ def main():
         global LOCAL_PORT
         LOCAL_PORT = int(args.port)
     if not ( args.username is None and args.password is None ):
-        print('Authentication enabled. Login set to {}/{}'.format(args.username,args.password))
+        print('Authentication enabled. Login set to {}/{}'.format(args.username,('*'*len(args.password))))
         global AUTH_ENABLE, AUTH_USER, AUTH_PASS
         AUTH_ENABLE = True
         AUTH_USER = args.username
